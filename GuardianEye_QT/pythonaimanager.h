@@ -22,6 +22,7 @@ signals:
     void frameReady(QImage img);
     void detectionAlert(QString type, double confidence);
     void errorOccurred(QString msg);
+    void statusChanged(QString status);
 
 private slots:
     void handleReadyRead();

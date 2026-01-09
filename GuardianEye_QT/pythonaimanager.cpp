@@ -106,10 +106,33 @@ void PythonAiManager::handleReadyRead() {
 void PythonAiManager::parseLine(const QByteArray &line) {
   QJsonParseError error;
   QJsonDocument doc = QJsonDocument::fromJson(line, &error);
-  if (error.error != QJsonParseError::NoError)
+  if (error.error != QJsonParseError::NoError) {
+    // 如果不是 JSON，則當作普通日誌輸出
+    QString rawLine = QString::fromUtf8(line).trimmed();
+    if (!rawLine.isEmpty()) {
+      qDebug() << "Python AI Log:" << rawLine;
+    }
     return;
+  }
 
   QJsonObject obj = doc.object();
+
+  // 檢查狀態訊息
+  if (obj.contains("status")) {
+    QString status = obj["status"].toString();
+    QString msg = obj["msg"].toString();
+    qDebug() << "AI System Status:" << status << "-" << msg;
+    emit statusChanged(msg);
+  }
+
+  // 檢查錯誤訊息
+  if (obj.contains("error")) {
+    QString errMsg = obj["error"].toString();
+    qDebug() << "AI System Error:" << errMsg;
+    emit errorOccurred(errMsg);
+    return;
+  }
+
   if (obj.contains("img")) {
     QString base64Img = obj["img"].toString();
     QByteArray imgData = QByteArray::fromBase64(base64Img.toUtf8());

@@ -43,6 +43,7 @@ private slots:
 
 protected:
   void keyPressEvent(QKeyEvent *event) override; // 處理連按快捷鍵
+  void closeEvent(QCloseEvent *event) override;  // 監控視窗關閉事件
 
 private:
   Ui::MainWindow *ui;

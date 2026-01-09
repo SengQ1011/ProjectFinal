@@ -8,6 +8,7 @@
 #include "securitycontroller.h"
 #include "ui_mainwindow.h"
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QDebug>
 #include <QFile>
@@ -27,10 +28,11 @@ MainWindow::MainWindow(QWidget *parent)
   adc = new Mcp3008Interface(this);
 
   // 2. 初始化業務邏輯控制器
-  camera = new PythonAiManager();
-  security = new SecurityController();
-  env = new EnvironmentalController();
-  emergency = new EmergencyController(blackbox);
+  camera = new PythonAiManager(this);
+  security = new SecurityController(); // 注意：SecurityController
+                                       // 可能會被移到執行緒，不要設 parent
+  env = new EnvironmentalController();           // 同上
+  emergency = new EmergencyController(blackbox); // 同上，且它依賴 blackbox
 
   // 初始化列表模型 (用於顯示黑盒子事件)
   eventModel = new QStringListModel(this);
@@ -42,11 +44,20 @@ MainWindow::MainWindow(QWidget *parent)
 
   security->moveToThread(logicThread);
   env->moveToThread(logicThread);
+  // emergency 也可以移到執行緒，但它目前看起來是在主執行緒管理計時器
 
   // 4. 連線設定 (訊號傳遞)
 
   // Camera -> UI (從 Python 獲取影像與 AI 結果)
   connect(camera, &PythonAiManager::frameReady, this, &MainWindow::updateFrame);
+  connect(camera, &PythonAiManager::statusChanged, this, [this](QString msg) {
+    ui->status_label->setText(QString("系統載入中: %1").arg(msg));
+  });
+  connect(camera, &PythonAiManager::errorOccurred, this, [this](QString msg) {
+    ui->status_label->setText(
+        QString("<font color='red'>錯誤: %1</font>").arg(msg));
+    QMessageBox::warning(this, "AI 系統錯誤", msg);
+  });
   connect(camera, &PythonAiManager::detectionAlert, this,
           [this](QString type, double conf) {
             // 檢查冷卻時間，避免洗板
@@ -190,6 +201,11 @@ MainWindow::~MainWindow() {
   logicThread->quit();
   logicThread->wait();
 
+  // 手動釋放沒有 parent 的物件
+  delete security;
+  delete env;
+  delete emergency;
+
   delete ui;
 }
 
@@ -287,8 +303,12 @@ void MainWindow::setupShortcuts() {
   QShortcut *f3 = new QShortcut(QKeySequence(Qt::Key_F3), this);
   connect(f3, &QShortcut::activated, this, [this]() { handleShortcut(3); });
 
-  QShortcut *f4 = new QShortcut(QKeySequence(Qt::Key_F4), this);
-  connect(f4, &QShortcut::activated, this, [this]() { handleShortcut(4); });
+  QShortcut *f4 =
+      new QShortcut(QKeySequence(Qt::CTRL + Qt::ALT + Qt::Key_Q), this);
+  connect(f4, &QShortcut::activated, this, [this]() {
+    qDebug() << "快捷鍵被觸發: [Ctrl+Alt+Q] 系統手動關閉";
+    handleShortcut(4);
+  });
 
   // --- 新增：F5 模擬 AI 觸發 ---
   QShortcut *f5 = new QShortcut(QKeySequence(Qt::Key_F5), this);
@@ -513,6 +533,12 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     }
   }
   QMainWindow::keyPressEvent(event);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+  qDebug() << "偵測到視窗關閉請求 (Close Event)";
+  blackbox->logEvent("偵測到視窗關閉請求", 0);
+  QMainWindow::closeEvent(event);
 }
 
 void MainWindow::updateFrame(QImage img) {

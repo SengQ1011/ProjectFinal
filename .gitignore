@@ -1,0 +1,19 @@
+# --- Qt / C++ 編譯產生的暫存檔 ---
+build/
+debug/
+release/
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+
+/vision_system.py
+/excel2vector.py
+/map_excel.xlsx
+/map_output.txt
+/FinalProject2025.pdf
+*.md
+

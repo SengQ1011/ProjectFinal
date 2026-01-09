@@ -15,6 +15,11 @@ Mcp3008Interface::~Mcp3008Interface() {
   if (m_spi_fd >= 0)
     close(m_spi_fd);
 
+  if (m_fd_sck >= 0) close(m_fd_sck);
+  if (m_fd_mosi >= 0) close(m_fd_mosi);
+  if (m_fd_miso >= 0) close(m_fd_miso);
+  if (m_fd_cs >= 0) close(m_fd_cs);
+
   if (m_use_bitbang) {
     gpioUnexport(PIN_SCK);
     gpioUnexport(PIN_MISO);
@@ -50,12 +55,17 @@ void Mcp3008Interface::initSpi() {
   if (gpioSetDirection(PIN_SCK, true) && gpioSetDirection(PIN_MOSI, true) &&
       gpioSetDirection(PIN_CS, true) && gpioSetDirection(PIN_MISO, false)) {
 
+    // 開啟檔案描述符以便快速寫入
+    m_fd_sck = open(QString("/sys/class/gpio/gpio%1/value").arg(PIN_SCK).toUtf8().constData(), O_WRONLY);
+    m_fd_mosi = open(QString("/sys/class/gpio/gpio%1/value").arg(PIN_MOSI).toUtf8().constData(), O_WRONLY);
+    m_fd_miso = open(QString("/sys/class/gpio/gpio%1/value").arg(PIN_MISO).toUtf8().constData(), O_RDONLY);
+    m_fd_cs = open(QString("/sys/class/gpio/gpio%1/value").arg(PIN_CS).toUtf8().constData(), O_WRONLY);
+
     gpioSetValue(PIN_CS, 1);
     gpioSetValue(PIN_SCK, 0);
-    qDebug() << "Mcp3008Interface: GPIO 狀態設定完成";
+    qDebug() << "Mcp3008Interface: GPIO 狀態設定完成並已開啟快速存取描述符";
   } else {
-    qDebug() << "Mcp3008Interface: GPIO 設定失敗，請確認是否以 sudo "
-                "執行且腳位未被佔用";
+    qDebug() << "Mcp3008Interface: GPIO 設定失敗";
   }
 }
 
@@ -91,12 +101,26 @@ int Mcp3008Interface::readAdcBitBang(int adcnum) {
   if (adcnum > 7 || adcnum < 0)
     return -1;
 
-  auto delay = []() { usleep(5); }; // 5微秒延遲
+  auto delay = []() { usleep(2); }; 
 
-  gpioSetValue(PIN_CS, 1);
-  gpioSetValue(PIN_SCK, 0);
+  auto fastSet = [](int fd, int val) {
+    if (fd >= 0) {
+      const char *v = val ? "1" : "0";
+      pwrite(fd, v, 1, 0);
+    }
+  };
+
+  auto fastGet = [](int fd) {
+    if (fd < 0) return 0;
+    char val;
+    pread(fd, &val, 1, 0);
+    return (val == '1') ? 1 : 0;
+  };
+
+  fastSet(m_fd_cs, 1);
+  fastSet(m_fd_sck, 0);
   delay();
-  gpioSetValue(PIN_CS, 0); // 開始傳輸
+  fastSet(m_fd_cs, 0); // 開始傳輸
   delay();
 
   int commandout = adcnum;
@@ -105,29 +129,29 @@ int Mcp3008Interface::readAdcBitBang(int adcnum) {
 
   // 送出 5 bits 指令
   for (int i = 0; i < 5; i++) {
-    gpioSetValue(PIN_MOSI, (commandout & 0x80) ? 1 : 0);
+    fastSet(m_fd_mosi, (commandout & 0x80) ? 1 : 0);
     commandout <<= 1;
     delay();
-    gpioSetValue(PIN_SCK, 1);
+    fastSet(m_fd_sck, 1);
     delay();
-    gpioSetValue(PIN_SCK, 0);
+    fastSet(m_fd_sck, 0);
   }
 
   // 讀取 12 bits (包含 1 個 null bit)
   int adcout = 0;
   for (int i = 0; i < 12; i++) {
-    gpioSetValue(PIN_SCK, 1);
+    fastSet(m_fd_sck, 1);
     delay();
-    gpioSetValue(PIN_SCK, 0);
+    fastSet(m_fd_sck, 0);
     delay();
     adcout <<= 1;
-    if (gpioGetValue(PIN_MISO)) {
+    if (fastGet(m_fd_miso)) {
       adcout |= 0x1;
     }
   }
 
-  gpioSetValue(PIN_CS, 1); // 結束傳輸
-  adcout >>= 1; // 捨棄最後一個多餘位元，符合 10-bit 解析度
+  fastSet(m_fd_cs, 1); // 結束傳輸
+  adcout >>= 1; 
   return adcout;
 }
 

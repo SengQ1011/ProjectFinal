@@ -31,6 +31,12 @@ private:
   bool gpioSetDirection(int pin, bool out);
   bool gpioSetValue(int pin, int value);
   int gpioGetValue(int pin);
+
+  // Bit-banging 文件描述符優化
+  int m_fd_sck = -1;
+  int m_fd_mosi = -1;
+  int m_fd_miso = -1;
+  int m_fd_cs = -1;
 };
 
 #endif // MCP3008INTERFACE_H
