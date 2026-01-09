@@ -1,5 +1,8 @@
 // discord_bot.js
-const { Client, GatewayIntentBits, AttachmentBuilder, EmbedBuilder } = require("discord.js");
+const { ReadableStream } = require('node:stream/web');
+global.ReadableStream = ReadableStream;
+
+const { Client, GatewayIntentBits, AttachmentBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -22,12 +25,12 @@ const POLL_INTERVAL = 1000; // 1 秒
 
 // ========================= 共享檔案路徑 =========================
 
-// const UNLOCK_STATUS_FILE = "/tmp/guardian_unlock_status.json";
-// const DISCORD_QUEUE_FILE = "/tmp/guardian_discord_queue.json";
-// const ALARM_STATUS_FILE = "/tmp/guardian_alarm_status.json";
-const UNLOCK_STATUS_FILE = path.join(__dirname, "guardian_unlock_status.json");
-const DISCORD_QUEUE_FILE = path.join(__dirname, "guardian_discord_queue.json");
-const ALARM_STATUS_FILE = path.join(__dirname, "guardian_alarm_status.json");
+const UNLOCK_STATUS_FILE = "/tmp/guardian_unlock_status.json";
+const DISCORD_QUEUE_FILE = "/tmp/guardian_discord_queue.json";
+const ALARM_STATUS_FILE = "/tmp/guardian_alarm_status.json";
+// const UNLOCK_STATUS_FILE = path.join(__dirname, "guardian_unlock_status.json");
+// const DISCORD_QUEUE_FILE = path.join(__dirname, "guardian_discord_queue.json");
+// const ALARM_STATUS_FILE = path.join(__dirname, "guardian_alarm_status.json");
 
 
 // ========================= Discord Client =========================
@@ -135,16 +138,33 @@ async function sendAlertToDiscord(queueData) {
       embed.setImage(`attachment://${path.basename(queueData.image_path)}`);
     }
 
+    // 新增：如果不是驗證碼，則提供互動按鈕
+    if (queueData.type !== "verification_code") {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("unlock_door")
+          .setLabel("🔓 遠端解鎖")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("dismiss_alert")
+          .setLabel("🛡️ 忽略警報")
+          .setStyle(ButtonStyle.Secondary)
+      );
+      messageOptions.components = [row];
+    }
+
     // 發送訊息
     await channel.send(messageOptions);
     console.log(`✅ 警報已發送到 Discord: ${queueData.type}`);
 
-    // 發送解鎖提示
-    await channel.send(
-      "🔐 **請輸入密碼進行遠端解鎖**\n" +
-      "格式: `!unlock 您的密碼`\n" +
-      "例如: `!unlock 1234`"
-    );
+    // 如果是警報訊息（非驗證碼），不再發送文字提示（因為已經有按鈕了）
+    // if (queueData.type !== "verification_code") {
+    //   await channel.send(
+    //     "🔐 **請輸入密碼進行遠端解鎖**\n" +
+    //     "格式: `!unlock 您的密碼`\n" +
+    //     "例如: `!unlock 1234`"
+    //   );
+    // }
 
   } catch (error) {
     console.error("❌ 發送 Discord 訊息失敗:", error.message);
@@ -160,6 +180,7 @@ function getAlertTitle(type) {
     "stranger_detected": "👤 陌生人偵測警報！",
     "motion_detected": "🚶 動態偵測警報！",
     "door_forced": "🚪 強制開門警報！",
+    "verification_code": "🔐 現場解鎖驗證碼",
   };
   return titles[type] || "🚨 系統警報";
 }
@@ -172,6 +193,63 @@ function verifyPassword(password) {
 }
 
 // ========================= Discord 事件處理 =========================
+
+/**
+ * 互動事件處理 (按鈕)
+ */
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const { customId, user } = interaction;
+
+  if (customId === "unlock_door") {
+    // 檢查是否有警報在進行
+    if (!fs.existsSync(ALARM_STATUS_FILE)) {
+      await interaction.reply({ content: "🛡️ **目前系統安全**，沒有正在進行的警報，不需要解鎖。", ephemeral: true });
+      return;
+    }
+
+    const alarmData = JSON.parse(fs.readFileSync(ALARM_STATUS_FILE, "utf8"));
+    if (!alarmData.alarm_active) {
+      await interaction.reply({ content: "🛡️ **目前系統安全**，警報尚未觸發。", ephemeral: true });
+      return;
+    }
+
+    // 執行解鎖邏輯
+    const unlockData = {
+      remote_unlocked: true,
+      password_correct: true, // 透過 Discord 按鈕視為已驗證
+      timestamp: new Date().toLocaleString("zh-TW", { hour12: false }),
+      unlock_method: "discord_button",
+      user: user.tag,
+    };
+
+    const success = writeUnlockStatus(unlockData);
+
+    if (success) {
+      const successEmbed = new EmbedBuilder()
+        .setTitle("✅ 遠端驗證通過！")
+        .setDescription("請返回現場輸入隨機密碼以完成解鎖。")
+        .setColor(0x00FF00)
+        .setTimestamp()
+        .addFields(
+          { name: "👤 解鎖者", value: user.tag, inline: true },
+          { name: "⏰ 時間", value: new Date().toLocaleString("zh-TW"), inline: true }
+        );
+
+      await interaction.update({ embeds: [interaction.message.embeds[0]], components: [] }); // 移除按鈕
+      await interaction.followUp({ embeds: [successEmbed] });
+      console.log(`✅ Discord 按鈕解鎖成功: ${user.tag}`);
+    } else {
+      await interaction.reply({ content: "❌ 系統錯誤，無法寫入解鎖狀態。", ephemeral: true });
+    }
+  } 
+  
+  else if (customId === "dismiss_alert") {
+    await interaction.update({ content: "🛡️ 警報已被主人忽略。", components: [] });
+    console.log(`🛡️ Discord 警報已由 ${user.tag} 忽略`);
+  }
+});
 
 /**
  * Bot 就緒事件
@@ -210,6 +288,18 @@ client.on("messageCreate", async (message) => {
 
   // 處理解鎖指令: !unlock <密碼>
   if (content.startsWith("!unlock")) {
+    // 先檢查是否有警報在進行
+    if (!fs.existsSync(ALARM_STATUS_FILE)) {
+      await message.reply("🛡️ **目前系統安全**，沒有正在進行的警報，不需要解鎖。");
+      return;
+    }
+
+    const alarmData = JSON.parse(fs.readFileSync(ALARM_STATUS_FILE, "utf8"));
+    if (!alarmData.alarm_active) {
+      await message.reply("🛡️ **目前系統安全**，警報尚未觸發。");
+      return;
+    }
+
     const parts = content.split(/\s+/);
 
     if (parts.length < 2) {
@@ -225,7 +315,7 @@ client.on("messageCreate", async (message) => {
       const unlockData = {
         remote_unlocked: true,
         password_correct: true,
-        timestamp: new Date().toISOString(),
+        timestamp: new Date().toLocaleString("zh-TW", { hour12: false }),
         unlock_method: "discord",
         user: message.author.tag,
       };

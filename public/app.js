@@ -112,9 +112,15 @@ function updateAlarmStatus(data) {
             'default': '偵測到異常活動！'
         };
 
-        $('#alarm-type-text').text(alarmTypes[data.alarm_type] || alarmTypes.default);
         $('#alarm-time-text').text(`觸發時間：${data.alarm_time || '--'}`);
         $('#alarm-confidence-text').text(`信心度：${(data.alarm_confidence * 100).toFixed(1)}%`);
+
+        // 更新緊急倒數
+        if (data.countdown) {
+            $('#alarm-type-text').html(`${alarmTypes[data.alarm_type] || alarmTypes.default} <br> <span style="color: #ff4d4d; font-size: 1.2em; font-weight: bold;">🚨 緊急自毀倒數：${data.countdown} 🚨</span>`);
+        } else {
+            $('#alarm-type-text').text(alarmTypes[data.alarm_type] || alarmTypes.default);
+        }
 
     } else {
         // 系統正常
@@ -125,12 +131,22 @@ function updateAlarmStatus(data) {
 
 // ========== 更新解鎖狀態 ==========
 function updateUnlockStatus(data) {
-    if (data.remote_unlocked) {
-        // 遠端已解鎖
-        $('#unlock-form').hide();
-        $('#unlock-success').show();
+    // 只有在警報啟動時才顯示解鎖介面
+    if (data.alarm_active) {
+        $('#unlock-section').show(); // 假設這是包含解鎖表單的區塊
+        
+        if (data.remote_unlocked) {
+            // 遠端已解鎖，顯示成功訊息
+            $('#unlock-form').hide();
+            $('#unlock-success').show();
+        } else {
+            // 尚未解鎖，顯示輸入框
+            $('#unlock-form').show();
+            $('#unlock-success').hide();
+        }
     } else {
-        // 尚未解鎖
+        // 沒有警報，隱藏解鎖區塊
+        $('#unlock-section').hide();
         $('#unlock-form').show();
         $('#unlock-success').hide();
     }

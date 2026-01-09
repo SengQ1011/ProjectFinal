@@ -133,13 +133,14 @@ app.get("/api/status", (req, res) => {
     alarm_type: alarmStatus.alarm_type,
     alarm_time: alarmStatus.timestamp,
     alarm_confidence: alarmStatus.confidence,
+    countdown: alarmStatus.countdown_str || null,
 
     // 解鎖狀態
     remote_unlocked: unlockStatus.remote_unlocked,
     awaiting_local_code: unlockStatus.remote_unlocked && !unlockStatus.password_correct,
 
     // 系統資訊
-    server_time: new Date().toISOString(),
+    server_time: new Date().toLocaleString("zh-TW", { hour12: false }),
     uptime: process.uptime()
   });
 });
@@ -152,7 +153,16 @@ app.get("/api/status", (req, res) => {
 app.post("/api/unlock", (req, res) => {
   const { password } = req.body;
 
-  // 驗證密碼
+  // 1. 先檢查是否有活動中的警報
+  const alarmStatus = readAlarmStatus();
+  if (!alarmStatus.alarm_active) {
+    return res.status(403).json({
+      success: false,
+      message: "🛡️ 目前系統狀態正常，無需解鎖。"
+    });
+  }
+
+  // 2. 驗證密碼
   if (!password) {
     return res.status(400).json({
       success: false,
@@ -165,7 +175,7 @@ app.post("/api/unlock", (req, res) => {
     const unlockData = {
       remote_unlocked: true,
       password_correct: true,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toLocaleString("zh-TW", { hour12: false }),
       unlock_method: "web"
     };
 
@@ -217,6 +227,24 @@ app.post("/api/control", (req, res) => {
 
   // 寫入控制檔（Qt 輪詢讀取）
   try {
+    if (action === "reset") {
+      // 1. 如果是重置指令，Server 端主動清理所有狀態檔，確保網頁立刻恢復正常
+      const filesToClear = [
+        ALARM_STATUS_FILE,
+        UNLOCK_STATUS_FILE,
+        CONTROL_FILE,
+        "/tmp/guardian_discord_queue.json"
+      ];
+      
+      filesToClear.forEach(file => {
+        if (fs.existsSync(file)) {
+          fs.unlinkSync(file);
+        }
+      });
+      console.log("🧹 Server 已主動清理所有狀態檔案");
+    }
+
+    // 2. 依然寫入控制檔或通知 Qt (如果是 reset 以外的動作，或讓 Qt 知道要重置內部變數)
     fs.writeFileSync(CONTROL_FILE, action);
     console.log(`✅ 控制指令已發送: ${action}`);
 
@@ -271,7 +299,7 @@ function logEvent(eventName, eventType, status) {
   const LOG_FILE = "/tmp/guardian_logs.json";
 
   const newLog = {
-    time: new Date().toLocaleString("zh-TW"),
+    time: new Date().toLocaleString("zh-TW", { hour12: false }),
     event: eventName,
     status: status,
     type: eventType
